@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+
+{% block head %}
+    <title>Room #{{ room }}</title>
+{% endblock %}
+
+{% block content %}
+    <div class="row">
+        <div class="col-3">
+            <div class="row">
+                <video id="myVideo" autoplay></video>
+            </div>
+            <div class="row mt-5">
+                <video id="video" autoplay></video>
+            </div>
+        </div>
+        <div class="col-9">
+            <h2>P2P WebRTC + WebSocket Chat</h2>
+            <input type="hidden" id="room" value="{{room}}">
+            <form id="chatForm">
+                <input type="text" placeholder="message.." id="messageText" autocomplete="off"/>
+                <button>Send</button>
+            </form>
+            <ul class="my-3 p-0" id='messages'>
+
+            </ul>
+        </div>
+    </div>
+    <script src="{{ url_for('static', path='js/connection.js') }}"></script>
+    <script src="{{ url_for('static', path='js/websocket.js') }}"></script>
+{% endblock %}

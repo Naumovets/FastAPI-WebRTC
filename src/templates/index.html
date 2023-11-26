@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+
+{% block head %}
+<title>OnSmart - system for conference</title>
+
+<script>
+
+    const enterToRoom = () => {
+        room = document.getElementById('room').value;
+        if(room == ''){
+            alert('Please, write name of room');
+        }else{
+            window.location.href += 'p2p/' + room
+        }
+    }
+
+
+</script>
+
+{% endblock %}
+
+{% block content %}
+<div class="col-4 d-flex align-items-end">
+    <div>
+        <label for="room" class="form-label">Room</label>
+        <input type="text" class="form-control" id="room" placeholder="elbrus" required>
+    </div>
+    <button onclick="enterToRoom()" type="button" class="btn btn-secondary ms-2">enter</button>
+
+</div>
+{% endblock %}
