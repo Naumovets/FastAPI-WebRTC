@@ -1,95 +1,121 @@
-import json
-from abc import ABC, abstractmethod
-from typing import List
-from calls.socket import Socket
+import copy
+
+from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack, RTCIceCandidate
+from aiortc.rtcrtpreceiver import RemoteStreamTrack
+
+from calls.utils import decode_icecandidate
 
 
-class ConnectionManager(ABC):
+class Stream:
     def __init__(self):
-        self.room_connections: dict[str, List[Socket]] = dict()
+        # self.tracks: dict[str, dict[str, List[MediaStreamTrack]]] = dict()
+        self.tracks: dict[str, RemoteStreamTrack] = dict()
 
-    @abstractmethod
-    async def connect(self, websocket: Socket, room: str) -> bool:
-        ...
+    def set_track(self, room: str, track: RemoteStreamTrack) -> None:
+        self.tracks[room] = track
 
-    @abstractmethod
-    async def disconnect(self, websocket: Socket, room: str) -> None:
-        ...
+    def get_track(self, room: str) -> RemoteStreamTrack:
+        if room in self.tracks.keys():
+            return self.tracks[room]
 
-    async def send_personal_message(self, message: str, websocket: Socket) -> None:
-        await websocket.send_text(message)
-
-    async def broadcast(self, room: str, message: str) -> None:
-        if room in self.room_connections.keys():
-            for connection in self.room_connections[room]:
-                await connection.send_text(message)
+    def delete_track(self, room):
+        if room in self.tracks.keys():
+            self.tracks.pop(room)
 
 
-class P2PConnectionManager(ConnectionManager):
+class WebRTCConnection:
+    def __init__(self, room: str, user: str):
+        self.peer: RTCPeerConnection = RTCPeerConnection()
+        self.room: str = room
+        self.user: str = user
+
+    async def add_icecandidate(self, icecandidate: dict):
+        """
+            component: int
+            foundation: str
+            ip: str
+            port: int
+            priority: int
+            protocol: str
+            type: str
+            relatedAddress: Optional[str] = None
+            relatedPort: Optional[int] = None
+            sdpMid: Optional[str] = None
+            sdpMLineIndex: Optional[int] = None
+            tcpType: Optional[str] = None
+            """
+        decoded_ice_candidate = decode_icecandidate(icecandidate)
+        result_ice_candidate = RTCIceCandidate(component=decoded_ice_candidate['component'],
+                                               foundation=decoded_ice_candidate['foundation'],
+                                               ip=decoded_ice_candidate['ip'],
+                                               port=decoded_ice_candidate['port'],
+                                               priority=decoded_ice_candidate['priority'],
+                                               protocol=decoded_ice_candidate['protocol'],
+                                               type=decoded_ice_candidate['type'],
+                                               sdpMid=decoded_ice_candidate['sdpMid'],
+                                               sdpMLineIndex=decoded_ice_candidate['sdpMLineIndex']
+                                               )
+        # result_ice_candidate = RTCIceCandidate(*decoded_ice_candidate)
+        # print(list(**decoded_ice_candidate))
+        await self.peer.addIceCandidate(result_ice_candidate)
+
+
+class ConsumerWebRTCConnection(WebRTCConnection):
+    def __init__(self, room: str, user: str):
+        super().__init__(room, user)
+
+    async def get_answer(self, offer: dict) -> RTCSessionDescription:
+        desc = RTCSessionDescription(offer['sdp'], offer['type'])
+        await self.peer.setRemoteDescription(desc)
+        track = copy.copy(stream.get_track(self.room))
+        self.peer.addTrack(track)
+        answer = await self.peer.createAnswer()
+        await self.peer.setLocalDescription(answer)
+
+        return self.peer.localDescription
+
+
+class BroadcastWebRTCConnection(WebRTCConnection):
+    def __init__(self, room: str, user: str):
+        super().__init__(room, user)
+
+        @self.peer.on('track')
+        async def on_track(event: RemoteStreamTrack):
+            print('Track received:', event.kind)
+            if event.kind == "video":
+                stream.set_track(room, event)
+
+        @self.peer.on('icecandidate')
+        async def on_candidate(event):
+            print('Вызываю icecandidate')
+
+    async def get_answer(self, offer: dict) -> RTCSessionDescription:
+        desc = RTCSessionDescription(offer['sdp'], offer['type'])
+        await self.peer.setRemoteDescription(desc)
+        answer = await self.peer.createAnswer()
+        await self.peer.setLocalDescription(answer)
+
+        return self.peer.localDescription
+
+
+class Room:
     def __init__(self):
-        super().__init__()
+        self.connections: dict[str, dict[str, WebRTCConnection]] = dict()
 
-    async def connect(self, websocket: Socket, room: str):
-        await websocket.accept()
-        if room not in self.room_connections.keys():
-            websocket.name = 'user_1'
-            self.room_connections[room] = [websocket]
+    def add_connection(self, room: str, user: str, connection: WebRTCConnection):
+        if room not in self.connections.keys():
+            self.connections[room] = {user: connection}
         else:
-            if len(self.room_connections[room]) == 2:
-                data = json.dumps({
-                    'type': 'error',
-                    'data': None,
-                    'details': 'Not allowed more than 2 users'
-                })
-                await self.send_personal_message(message=data, websocket=websocket)
-                await websocket.close()
-                return False
-            else:
-                websocket.name = f'user_{len(self.room_connections[room]) + 1}'
-                self.room_connections[room].append(websocket)
-                if len(self.room_connections[room]) == 2:
-                    socket = self.room_connections[room][0]
-                    data = json.dumps({
-                        'type': 'status',
-                        'data': 'connected',
-                        'details': None
-                    })
-                    await self.send_personal_message(message=data, websocket=socket)
-                else:
-                    socket = self.room_connections[room][0]
-                    data = json.dumps({
-                        'type': 'status',
-                        'data': None,
-                        'details': 'You are alone in the room'
-                    })
-                    await self.send_personal_message(message=data, websocket=socket)
-        return True
+            self.connections[room][user] = connection
 
-    async def disconnect(self, websocket: Socket, room: str):
-        try:
-            self.room_connections[room].remove(websocket)
-            if len(self.room_connections[room]) == 1:
-                socket = self.room_connections[room][0]
-                data = json.dumps({
-                    'type': 'status',
-                    'data': 'disconnected',
-                    'details': None
-                })
-                await self.send_personal_message(message=data, websocket=socket)
-            else:
-                self.room_connections.pop(room)
-        except KeyError:
-            data = json.dumps({
-                'type': 'error',
-                'data': None,
-                'details': 'The room does not exist'
-            })
-            await self.send_personal_message(message=data, websocket=websocket)
+    def remove_connection(self, room: str, user: str):
+        if room not in self.connections.keys():
+            pass
+        elif user not in self.connections[room].keys():
+            pass
+        else:
+            self.connections[room].pop(user)
 
 
-class GroupConnectionManager(ConnectionManager):
-    async def connect(self, websocket: Socket, room: str) -> bool:
-        ...
-
-    async def disconnect(self, websocket: Socket, room: str) -> None:
-        ...
+stream = Stream()
+webrtc_connections = Room()

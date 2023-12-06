@@ -19,11 +19,12 @@ navigator.mediaDevices.getUserMedia({video: true}).then(stream=>{
             if (data.data == 'connected'){
                 connection.sendOffer()
             }else if(data.data == 'disconnected'){
+            }
                 connection = new Connection(ws, stream);
                 const videoDiv = document.getElementById('video');
                 videoDiv.srcObject = null;
             }else{
-                alert(data.details)
+                console.log(data.details)
             }
         }
         else if(data.type == 'message'){
